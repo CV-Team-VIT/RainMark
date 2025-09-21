@@ -60,7 +60,7 @@ def main():
     # Header
     st.title("🌧️ RainMark: Detecting and Quantifying Rain Streaks via Local-Weber Contrast and Pixel Saturation")
     st.markdown("""
-    **Analyze and quantify rain streaks in images using advanced computer vision techniques**
+    **Analyze and quantify rain streaks in images using Local-Weber Contrast and Pixel Saturation**
     
     This system implements a sophisticated algorithm that:
     - Detects rain streaks using contrast analysis
