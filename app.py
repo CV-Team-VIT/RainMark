@@ -58,7 +58,7 @@ def main():
     """Main Streamlit application"""
     
     # Header
-    st.title("🌧️ Rain Streak Detection System")
+    st.title("🌧️ RainMark: Detecting and Quantifying Rain Streaks via Local-Weber Contrast and Pixel Saturation")
     st.markdown("""
     **Analyze and quantify rain streaks in images using advanced computer vision techniques**
     
