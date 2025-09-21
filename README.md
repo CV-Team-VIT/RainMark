@@ -4,7 +4,7 @@
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-FF4B4B.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A sophisticated **Rain Streak Detection and Analysis System** that uses advanced computer vision techniques to identify, quantify, and visualize rain streaks in images. This Python implementation is converted from the original MATLAB codebase while maintaining 100% functional compatibility and adding modern web-based interface capabilities.
+A sophisticated **Rain Streak Detection and Analysis System** that uses Local-Weber Contrast and Pixel Saturation to identify, quantify, and visualize rain streaks in images.
 
 ## 🌟 Key Features
 
