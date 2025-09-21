@@ -38,17 +38,12 @@ A sophisticated **Rain Streak Detection and Analysis System** that uses advanced
 
 ### Installation
 
-1. **Navigate to the project directory:**
-   ```bash
-   cd python_version
-   ```
-
-2. **Install dependencies:**
+1. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Verify installation:**
+2. **Verify installation:**
    ```bash
    python setup_check.py
    ```
