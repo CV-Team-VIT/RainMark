@@ -4,12 +4,13 @@
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.28%2B-FF4B4B.svg)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A sophisticated **Rain Streak Detection and Analysis System** that uses Local-Weber Contrast and Pixel Saturation to identify, quantify, and visualize rain streaks in images.
+A **Rain Streak Detection and Analysis System** that uses orientation-aware Local-Weber Contrast, rain-streak pixel occupancy, and severity scoring to identify, quantify, and visualize rain streaks in paired clean/rainy images.
 
 ## 🌟 Key Features
 
 ### 🎯 **Core Functionality**
 - **Automated Rain Detection**: Identifies rain streaks using Weber contrast analysis
+- **Orientation-Aware Contrast**: Samples dominant rain-streak orientations from the rainy image and reuses them for GT comparison
 - **Edge Amplification Analysis**: Measures how rain enhances image edges
 - **Saturation Detection**: Identifies newly saturated pixels caused by rain (RESPO metric)
 - **Coverage Quantification**: Calculates percentage of image area affected by rain
@@ -158,12 +159,12 @@ Rain Detection Pipeline:
 
 #### 1. Contrast Analysis (Weber Contrast)
 - **Purpose**: Detect visible edges in both clean and rainy images
-- **Method**: Local contrast computation using sliding windows
+- **Method**: Local contrast computation using sliding windows and orientation-aware morphological line elements
 - **Output**: Binary edge maps for comparison
 
 #### 2. Edge Amplification Detection
 - **Purpose**: Quantify how rain enhances image edges
-- **Method**: Compare edge pixel counts between image pairs
+- **Method**: Estimate dominant rain-streak orientation from the rainy image, apply the same sampled orientations to the GT image, and compare edge pixel counts
 - **Formula**: `e1 = max(0, (edges_rain - edges_gt)) / (max(edges_rain, edges_gt) + ε)`
 
 #### 3. RESPO (Rain-streak Pixel Occupancy)
@@ -173,13 +174,18 @@ Rain Detection Pipeline:
 
 #### 4. Adaptive Rain Mask Generation
 - **Purpose**: Create precise rain streak boundaries
-- **Method**: Combine edge enhancement with brightness analysis
+- **Method**: Combine rain-only edge enhancement with adaptive normalized brightness differences
 - **Steps**:
   1. Identify candidate regions (edges in rain but not GT)
-  2. Apply adaptive brightness threshold
+  2. Apply adaptive local brightness threshold
   3. Clean mask using morphological operations
 
-#### 5. Mask Cleanup and Refinement
+#### 5. Orientation ROI Detection
+- **Purpose**: Match the MATLAB RainMark reference implementation for rain direction handling
+- **Method**: Build a gradient-orientation histogram, detect dominant peaks, merge wrap-around 0/180 degree regions, and sample line-element angles from the adaptive ROI
+- **Implementation**: `src/roi.py` and `src/morphology.py`
+
+#### 6. Mask Cleanup and Refinement
 - **Purpose**: Remove noise and small artifacts
 - **Method**: Connected component analysis with adaptive size filtering
 - **Process**: Remove components smaller than 1.5× median area
@@ -187,16 +193,22 @@ Rain Detection Pipeline:
 ### File Structure
 
 ```
-python_version/
+RainMark/
 ├── 📱 app.py                     # Main Streamlit web application
 ├── 🚀 launch.sh                  # Quick launch script
 ├── ✅ setup_check.py             # Dependency verification tool
 ├── 📦 requirements.txt           # Python package dependencies
 ├── 📖 README.md                  # This comprehensive guide
+├── 🖼️ Framework/                 # Research-paper framework diagram
+│   ├── rainmark-framework.drawio # Editable Draw.io source
+│   ├── rainmark-framework.png    # Standard PNG export
+│   └── rainmark-framework-highres.png # High-resolution paper export
 ├── 🔧 src/                       # Core processing modules
 │   ├── __init__.py
 │   ├── rain_detector.py          # Main detection algorithm
 │   ├── contrast_analyzer.py      # Weber contrast analysis
+│   ├── morphology.py             # MATLAB-style line structuring elements
+│   ├── roi.py                    # Adaptive orientation ROI detection
 │   ├── mask_cleanup.py           # Morphological mask processing
 │   └── main.py                   # Batch processing utilities
 └── 🛠️ utils/                     # Supporting utilities
@@ -221,6 +233,16 @@ python_version/
 
 **Utilities:**
 - **tqdm** (≥4.60.0): Progress bars for long operations
+
+## 🖼️ Framework Figure
+
+The repository includes a publication-ready RainMark block diagram in `Framework/`:
+
+- `rainmark-framework.drawio`: editable source diagram
+- `rainmark-framework.png`: standard-resolution export for quick viewing
+- `rainmark-framework-highres.png`: high-resolution export for direct paper embedding
+
+Only these required diagram artifacts are kept in the repository. Intermediate figure-generation files and local LaTeX build outputs are intentionally excluded.
 
 ## 🎛️ Advanced Usage
 
@@ -515,11 +537,16 @@ The rain detection algorithm is based on several computer vision and image proce
 - **Formula**: `C = (L - Lb) / Lb` where L is local luminance and Lb is background
 
 #### 2. **Morphological Image Processing**
-- **Erosion/Dilation**: Used for local min/max computation in contrast analysis
+- **Oriented Erosion/Dilation**: Used for local min/max computation along rain-streak directions
 - **Connected Components**: Applied for noise removal in final masks
 - **Area Opening**: Removes small artifacts based on size distribution
 
-#### 3. **Statistical Thresholding**
+#### 3. **Adaptive Orientation Estimation**
+- **Gradient Histogram**: Estimates dominant rain-streak direction from the rainy image
+- **ROI Sampling**: Samples line-element angles from adaptive orientation ranges
+- **GT Transfer**: Applies rainy-image orientations to the clean image for fair edge comparison
+
+#### 4. **Statistical Thresholding**
 - **Adaptive Thresholds**: Use percentile-based cutoffs rather than fixed values
 - **Robust Statistics**: Median-based computations resist outlier influence
 - **Multi-modal Analysis**: Combines multiple metrics for robust detection
@@ -631,4 +658,4 @@ We welcome suggestions for:
 
 **Made with ❤️ by the SidCV Team (VIT, Vellore)**
 
-*Last updated: September 2025*
+*Last updated: July 2026*

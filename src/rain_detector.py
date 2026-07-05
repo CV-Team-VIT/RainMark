@@ -1,164 +1,192 @@
 """
-Main rain streak detection algorithm - Python equivalent of detect_rainstreaks.m
+Main rain streak detection algorithm translated from detect_rainstreaks.m.
 """
-import numpy as np
+from __future__ import annotations
+
+from typing import Any, Dict
+
+import cv2
 import matplotlib.pyplot as plt
-from scipy import ndimage
-from typing import Dict, Any, Optional
+import numpy as np
+from scipy import ndimage, signal
 
-import os
-import sys
-
-# Add the project root to the path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(current_dir)
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-from src.contrast_analyzer import function_contrast_at_5_percent
+from src.contrast_analyzer import (
+    function_contrast_at_5_percent_gt,
+    function_contrast_at_5_percent_rain,
+)
 from src.mask_cleanup import adaptive_rain_mask_cleanup
-from utils.image_utils import rgb_to_gray, get_image_brightness
+from utils.image_utils import get_image_brightness, rgb_to_gray
 
 
-def detect_rainstreaks(GT: np.ndarray, Rain: np.ndarray, S: int = 7, 
-                      visibility_percent: float = 5.0, bright_thresh: int = 150,
-                      show_plots: bool = False) -> Dict[str, Any]:
+def _as_rgb_float(image: np.ndarray, name: str) -> np.ndarray:
+    image = np.asarray(image)
+    if image.ndim != 3 or image.shape[2] < 3:
+        raise ValueError(f"{name} must be an RGB image")
+    return image[:, :, :3].astype(np.float64, copy=False)
+
+
+def _resize_to_match(
+    array: np.ndarray,
+    target_shape: tuple[int, int],
+    interpolation: int,
+) -> np.ndarray:
+    if array.shape == target_shape:
+        return array
+    return cv2.resize(array, (target_shape[1], target_shape[0]), interpolation=interpolation)
+
+
+def _create_overlay(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    overlay = np.clip(image, 0, 255).astype(np.uint8).copy()
+    mask = mask.astype(bool)
+    overlay[mask, 0] = 57
+    overlay[mask, 1] = 255
+    overlay[mask, 2] = 20
+    return overlay
+
+
+def detect_rainstreaks(
+    GT: np.ndarray,
+    Rain: np.ndarray,
+    S: int = 7,
+    visibility_percent: float = 5.0,
+    bright_thresh: int = 150,
+    show_plots: bool = False,
+) -> Dict[str, Any]:
     """
-    Detect and quantify rain streaks in color images using contrast and saturation analysis.
-    
-    This is the Python equivalent of detect_rainstreaks.m
-    
-    Args:
-        GT: Ground truth RGB image (numpy array)
-        Rain: Rainy RGB image (numpy array)  
-        S: Subwindow size for local contrast computation (default: 7)
-        visibility_percent: Visibility threshold percentage (default: 5.0)
-        bright_thresh: Threshold for detecting saturated (bright) pixels (default: 150)
-        show_plots: Whether to display intermediate results (default: False)
-        
-    Returns:
-        Dictionary with results:
-        - e1: Edge amplification ratio
-        - ns1: Percentage of newly saturated pixels
-        - streak_area: Rain streak area ratio
-        - percentage_streak_area: Percentage of image area covered by rain streaks
-        - overlay: RGB image with streaks highlighted in neon green
-        - rain_mask: Binary mask of detected rain streaks
+    Detect and quantify rain streaks using the MATLAB RainMark algorithm.
     """
-    
-    # Ensure inputs are in proper format
-    GT = GT.astype(np.float64)
-    Rain = Rain.astype(np.float64)
-    
-    # 1. Compute gradient magnitude (convert RGB to grayscale for gradient computation)
-    GT_gray = rgb_to_gray(GT)
-    Rain_gray = rgb_to_gray(Rain)
-    
-    # 2. Contrast maps using grayscale images
-    edges_GT, _ = function_contrast_at_5_percent(GT_gray, S, visibility_percent)
-    edges_Rain, _ = function_contrast_at_5_percent(Rain_gray, S, visibility_percent)
-    
-    # 3. Edge amplification metric
+    GT = _as_rgb_float(GT, "GT")
+    Rain = _as_rgb_float(Rain, "Rain")
+
+    if GT.shape[:2] != Rain.shape[:2]:
+        raise ValueError("GT and Rain images must have matching height and width")
+
+    GT_gray = rgb_to_gray(GT).astype(np.float64)
+    Rain_gray = rgb_to_gray(Rain).astype(np.float64)
+
+    (
+        mask_rain,
+        contrast_rain,
+        dominant_angle_primary,
+        dominant_angle_weighted,
+        roi,
+        angles,
+    ) = function_contrast_at_5_percent_rain(
+        Rain_gray,
+        S=S,
+        percentage=visibility_percent,
+        verbose=show_plots,
+    )
+
+    gt_smooth = ndimage.gaussian_filter(GT_gray, sigma=1.5)
+    mask_gt, contrast_gt = function_contrast_at_5_percent_gt(
+        gt_smooth,
+        S=S,
+        percentage=visibility_percent,
+        angles=angles,
+        verbose=show_plots,
+    )
+
+    mask_gt = _resize_to_match(
+        mask_gt.astype(np.uint8),
+        mask_rain.shape,
+        interpolation=cv2.INTER_NEAREST,
+    ).astype(bool)
+
     epsilon = 1e-6
-    wI = np.sum(edges_Rain)  # W_I
-    wJ = np.sum(edges_GT)    # W_J
-    e1 = max(0, (wI - wJ)) / (max(wI, wJ) + epsilon)
-    
-    # 4. RESPO: Rain-streak Pixel Occupancy for newly saturated pixel detection
-    bright_Rain = get_image_brightness(Rain)  # B_I, brightness of rainy image
-    bright_GT = get_image_brightness(GT)      # B_J, brightness of GT image
-    
-    # 3x3 convolution kernel (equivalent to MATLAB's ones(3))
-    kernel = np.ones((3, 3))
-    
-    # Detect newly saturated pixels
-    newly_saturated_condition = (bright_Rain >= bright_thresh) & (bright_GT < bright_thresh)
-    new_saturated = ndimage.convolve(newly_saturated_condition.astype(float), kernel, mode='constant') > 0
-    ns1 = np.sum(new_saturated) / bright_GT.size
-    
-    # 5. Adaptive brightness delta
-    # Candidate edge region: edges in Rain but not in GT
-    Nmap = (edges_Rain == 1) & (edges_GT == 0)
-    
-    # Absolute brightness difference
-    diff = bright_Rain - bright_GT
-    
-    # Percentile only over candidate region
-    if np.any(Nmap):
-        delta = np.percentile(np.abs(diff[Nmap]), 50)  # 50th percentile (median)
-    else:
-        delta = 0
-    
-    # 6. Rain streak coverage
-    rain_streak_mask = Nmap & (np.abs(diff) > delta)
-    
+    wI = np.sum(mask_rain)
+    wJ = np.sum(mask_gt)
+    e1 = max(0.0, float(wI - wJ)) / (max(float(wI), float(wJ)) + epsilon)
+
+    bright_Rain = get_image_brightness(Rain).astype(np.float64)
+    bright_GT = get_image_brightness(GT).astype(np.float64)
+    bright_GT = _resize_to_match(
+        bright_GT,
+        bright_Rain.shape,
+        interpolation=cv2.INTER_LINEAR,
+    ).astype(np.float64)
+
+    kernel = np.ones((3, 3), dtype=np.float64)
+    new_saturated = signal.convolve2d(
+        ((bright_Rain >= bright_thresh) & (bright_GT < bright_thresh)).astype(np.float64),
+        kernel,
+        mode="same",
+        boundary="fill",
+        fillvalue=0,
+    ) > 0
+    ns1 = float(np.sum(new_saturated) / bright_GT.size)
+
+    neighborhood_size = 7
+    tau = 2.0
+    epsv = 1e-6
+    muJ = ndimage.uniform_filter(bright_GT, size=neighborhood_size, mode="nearest")
+    brightness_diff = bright_Rain - bright_GT
+    delta_b = brightness_diff / (np.maximum(muJ, tau) + epsv)
+    delta = float(np.percentile(delta_b, 80))
+
+    rain_streak_mask = (
+        (mask_rain == 1)
+        & (mask_gt == 0)
+        & ((bright_Rain > bright_GT + delta) | (bright_Rain < bright_GT - delta))
+    )
+
     if show_plots:
         plt.figure(figsize=(12, 4))
         plt.subplot(1, 3, 1)
-        plt.imshow(rain_streak_mask, cmap='gray')
-        plt.title('Initial Rain Streak Mask')
-        plt.axis('off')
-    
-    # Clean up the mask
+        plt.imshow(rain_streak_mask, cmap="gray")
+        plt.title("Initial Rain Streak Mask")
+        plt.axis("off")
+
     mask_clean = adaptive_rain_mask_cleanup(rain_streak_mask)
-    streak_area = np.sum(mask_clean) / mask_clean.size
-    percentage_streak_area = 100 * streak_area
-    
+    streak_area = float(np.sum(mask_clean) / mask_clean.size)
+    percentage_streak_area = 100.0 * streak_area
+
     if show_plots:
         plt.subplot(1, 3, 2)
-        plt.imshow(mask_clean, cmap='gray')
-        plt.title('Cleaned Rain Streak Mask')
-        plt.axis('off')
-    
-    # 7. Visualization (overlay neon green on rain streaks)
-    overlay = Rain.copy().astype(np.uint8)
-    
-    # Neon green RGB values
-    neon_r, neon_g, neon_b = 57, 255, 20
-    
-    # Apply neon green to masked pixels
-    overlay[mask_clean, 0] = neon_r  # Red channel
-    overlay[mask_clean, 1] = neon_g  # Green channel  
-    overlay[mask_clean, 2] = neon_b  # Blue channel
-    
+        plt.imshow(mask_clean, cmap="gray")
+        plt.title("Cleaned Rain Streak Mask")
+        plt.axis("off")
+
+    overlay = _create_overlay(Rain, mask_clean)
+
     if show_plots:
         plt.subplot(1, 3, 3)
         plt.imshow(overlay)
-        plt.title('Rain Streaks Highlighted (Neon)')
-        plt.axis('off')
+        plt.title("Rain Streaks Highlighted (Neon)")
+        plt.axis("off")
         plt.tight_layout()
         plt.show()
-    
-    # 8. Output structure
-    results = {
-        'e1': e1,
-        'ns1': ns1,
-        'streak_area': streak_area,
-        'percentage_streak_area': percentage_streak_area,
-        'overlay': overlay,
-        'rain_mask': mask_clean,
-        'edge_map_gt': edges_GT,
-        'edge_map_rain': edges_Rain,
-        'brightness_diff': diff,
-        'delta_threshold': delta
+
+    return {
+        "e1": e1,
+        "ns1": ns1,
+        "streak_area": streak_area,
+        "percentage_streak_area": percentage_streak_area,
+        "overlay": overlay,
+        "rain_mask": mask_clean,
+        "edge_map_gt": mask_gt,
+        "edge_map_rain": mask_rain,
+        "brightness_diff": brightness_diff,
+        "delta_threshold": delta,
+        "mask_clean": mask_clean,
+        "mask_gt": mask_gt,
+        "mask_rain": mask_rain,
+        "rain_streak_mask": rain_streak_mask,
+        "contrast_map_gt": contrast_gt,
+        "contrast_map_rain": contrast_rain,
+        "dominant_angle_primary": dominant_angle_primary,
+        "dominant_angle_weighted": dominant_angle_weighted,
+        "roi": roi,
+        "angles": angles,
     }
-    
-    return results
 
 
 def calculate_rain_severity(results: Dict[str, Any]) -> float:
     """
     Calculate rain severity score using the formula from the original MATLAB code.
-    
-    Args:
-        results: Results dictionary from detect_rainstreaks
-        
-    Returns:
-        Rain severity score
     """
-    # Formula from MATLAB: Rain_Severity = 17.138146 * e1 + 0.132285 * ns1 + 0.887244 * streak_area
-    rain_severity = (17.138146 * results['e1'] + 
-                    0.132285 * results['ns1'] + 
-                    0.887244 * results['streak_area'])
-    
-    return rain_severity
+    return (
+        17.138146 * results["e1"]
+        + 0.132285 * results["ns1"]
+        + 0.887244 * results["streak_area"]
+    )
